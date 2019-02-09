@@ -1137,25 +1137,26 @@ class BackfillJobTest(unittest.TestCase):
 
         session.close()
 
+
+    def get_test_dag_for_backfill(schedule_interval=None):
+        dag = DAG(
+            dag_id='test_get_dates',
+            start_date=DEFAULT_DATE,
+            schedule_interval=schedule_interval)
+        DummyOperator(
+            task_id='dummy',
+            dag=dag,
+            owner='airflow')
+        return dag
+
     def test_dag_get_run_dates(self):
 
-        def get_test_dag_for_backfill(schedule_interval=None):
-            dag = DAG(
-                dag_id='test_get_dates',
-                start_date=DEFAULT_DATE,
-                schedule_interval=schedule_interval)
-            DummyOperator(
-                task_id='dummy',
-                dag=dag,
-                owner='airflow')
-            return dag
-
-        test_dag = get_test_dag_for_backfill()
+        test_dag = self.get_test_dag_for_backfill()
         self.assertEqual([DEFAULT_DATE], test_dag.get_run_dates(
             start_date=DEFAULT_DATE,
             end_date=DEFAULT_DATE))
 
-        test_dag = get_test_dag_for_backfill(schedule_interval="@hourly")
+        test_dag = self.get_test_dag_for_backfill(schedule_interval="@hourly")
         self.assertEqual([DEFAULT_DATE - datetime.timedelta(hours=3),
                           DEFAULT_DATE - datetime.timedelta(hours=2),
                           DEFAULT_DATE - datetime.timedelta(hours=1),
@@ -1163,6 +1164,32 @@ class BackfillJobTest(unittest.TestCase):
                          test_dag.get_run_dates(
                              start_date=DEFAULT_DATE - datetime.timedelta(hours=3),
                              end_date=DEFAULT_DATE,))
+
+    def test_backfill_run_backwards(self):
+
+        test_dag = self.get_test_dag_for_backfill(schedule_interval="@daily")
+        job = BackfillJob(
+            dag=test_dag,
+            start_date=DEFAULT_DATE,
+            end_date=DEFAULT_DATE + datetime.timedelta(days=1),
+            ignore_first_depends_on_past=True,
+            run_backwards=True,
+        )
+        job.run()
+
+        session = settings.Session()
+        drs = session.query(DagRun).filter(
+            DagRun.dag_id == test_dag.dag_id
+        ).order_by(DagRun.execution_date).all()
+
+        self.assertTrue(drs[0].execution_date ==
+                        DEFAULT_DATE + datetime.timedelta(days=1))
+        self.assertTrue(drs[0].state == State.SUCCESS)
+        self.assertTrue(drs[1].execution_date == DEFAULT_DATE)
+        self.assertTrue(drs[1].state == State.SUCCESS)
+
+        test_dag.clear()
+        session.close()
 
 
 class LocalTaskJobTest(unittest.TestCase):
